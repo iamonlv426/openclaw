@@ -410,11 +410,13 @@ describe("memory entry origins", () => {
         kind: "origin-rows",
         rows: [first, second],
       });
-      await writer.run((scope) =>
-        scope.execute({
-          type: "forget.mark",
-          input: { agentId: "main", sessionIds: ["forgotten"], entryKeys: [], identity: "[]" },
-        }),
+      await writer.run(
+        (scope) =>
+          scope.execute({
+            type: "forget.mark",
+            input: { agentId: "main", sessionIds: ["forgotten"], entryKeys: [], identity: "[]" },
+          }),
+        () => {},
       );
       expect(
         readMemoryOriginsInWorker({
