@@ -119,7 +119,9 @@ function PluginSettingsRow(props: FieldProps) {
         const target = event.target;
         if (
           !(target instanceof Element) ||
-          target.closest("button,a,input,select,textarea,label,summary,[contenteditable]")
+          target.closest(
+            "button,a,input,select,textarea,label,summary,[contenteditable],.plugin-editor__menu",
+          )
         ) {
           return;
         }
