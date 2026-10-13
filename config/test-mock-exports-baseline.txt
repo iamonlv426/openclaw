@@ -6137,7 +6137,6 @@
 ["src/commands/status-json-payload.test.ts","../infra/update-channels.js","a9a8fddfbabafdce7d7261575c63773a9ae26572ef8f197c12af1414e0607ad2",1]
 ["src/commands/status-json-runtime.test.ts","../state/backup-run-records.js","485178875a066e4522ad7836bfdc83d114f59665b022c9b2fb6fcc9dabda3b9e",1]
 ["src/commands/status-json-runtime.test.ts","./status-json-payload.ts","cf4afdb7e2111ab2a625945a86517473842226891c40e7e5635e9320ba5927ac",1]
-["src/commands/status-json-runtime.test.ts","./status-runtime-shared.ts","8d6cdfd06b8979c74d368e855b1940654c10e245ecbddd29c4e49d3807bce48c",1]
 ["src/commands/status-json.test.ts","../gateway/call.js","64011d40301330b379e7aea54e4e35d6dfa3da206700467657e3fa35f1e31c87",1]
 ["src/commands/status-json.test.ts","../infra/provider-usage.js","0770470a01662caacf023b5a28d06a1218bd8af9e23a22cf334b564cad7f46e2",1]
 ["src/commands/status-json.test.ts","../infra/update-channels.js","a9a8fddfbabafdce7d7261575c63773a9ae26572ef8f197c12af1414e0607ad2",1]
