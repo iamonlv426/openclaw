@@ -96,11 +96,15 @@ export async function transformArchiveBytesIncrementally(
   const decoder = () => (params.encoding === "zstd" ? createZstdDecompress() : new PassThrough());
   let changed = false;
   // Await codec teardown as well as iteration errors before returning to Doctor.
-  await pipeline(archiveInputChunks(params.bytes), decoder(), async (source) => {
-    for await (const part of transformArchiveLineChunks(source, params)) {
-      changed ||= part.changed;
-    }
-  });
+  await pipeline(
+    archiveInputChunks(params.bytes),
+    decoder(),
+    async (source: AsyncIterable<Buffer>) => {
+      for await (const part of transformArchiveLineChunks(source, params)) {
+        changed ||= part.changed;
+      }
+    },
+  );
   if (!changed) {
     return { changed: false, bytes: params.bytes };
   }
@@ -109,13 +113,13 @@ export async function transformArchiveBytesIncrementally(
   await pipeline(
     archiveInputChunks(params.bytes),
     decoder(),
-    async function* (source) {
+    async function* (source: AsyncIterable<Buffer>) {
       for await (const part of transformArchiveLineChunks(source, params)) {
         yield part.bytes;
       }
     },
     params.encoding === "zstd" ? createZstdCompress() : new PassThrough(),
-    async (encoded) => {
+    async (encoded: AsyncIterable<Buffer>) => {
       for await (const chunk of encoded) {
         params.signal?.throwIfAborted();
         chunks.push(Buffer.from(chunk));
