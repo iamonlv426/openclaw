@@ -19,7 +19,8 @@ import * as directiveTransform from "./state-migrations.transcript-directives-tr
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
 const original = Buffer.from('{"type":"custom","data":"original"}\n');
-const replacement = '{"type":"custom","data":"normalized"}\n';
+const replacementLine = '{"type":"custom","data":"normalized"}';
+const replacement = `${replacementLine}\n`;
 const count = 202;
 const key = (index: number) => String(index).padStart(3, "0");
 
@@ -73,9 +74,9 @@ function fixture(emptySessionIds = false) {
     database,
     pathname,
     start: { generation: "", sessionId: "" },
-    transformContent: (content: string) => ({
-      changed: content !== replacement,
-      content: replacement,
+    transformLine: (content: string) => ({
+      changed: content !== replacementLine,
+      content: replacementLine,
     }),
     writeCursor(cursor: { sessionId: string } | { phase: "complete" }) {
       database
@@ -114,10 +115,7 @@ describe("canonical archive migration progress", () => {
         await f.run(() =>
           migrateCanonicalTranscriptArchives({
             ...f.options,
-            transformContent(content) {
-              visit();
-              return f.options.transformContent(content);
-            },
+            onArchive: visit,
           }),
         );
         expect(f.rewritten()).toBe(count);
@@ -169,12 +167,12 @@ describe("canonical archive migration progress", () => {
           f.run(() =>
             migrateCanonicalTranscriptArchives({
               ...f.options,
-              transformContent(content) {
+              transformLine(content) {
                 if (!scheduled) {
                   scheduled = true;
                   setImmediate(() => f.controller.abort(interrupted));
                 }
-                return f.options.transformContent(content);
+                return f.options.transformLine(content);
               },
             }),
           ),
@@ -243,11 +241,14 @@ describe("canonical archive migration progress", () => {
     await f.run(() =>
       migrateCanonicalTranscriptArchives({
         ...f.options,
-        transformContent(content, owner) {
-          if (Number(owner.split(":")[0]) % TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE === 0) {
+        onArchive(archivePath) {
+          if (
+            Number(path.basename(archivePath, ".jsonl")) %
+              TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE ===
+            0
+          ) {
             now += 75;
           }
-          return f.options.transformContent(content);
         },
       }),
     );

@@ -25,13 +25,6 @@ export function parseTranscriptEvent(raw: string, owner: string): TranscriptEven
   }
 }
 
-export function transformMediaArchiveLine(
-  line: string,
-  owner: string,
-): { changed: boolean; content: string } {
-  return transformMediaArchiveContent(line, owner);
-}
-
 function parseArchiveContent(content: string, filePath: string): TranscriptEvent[] {
   if (content === "") {
     return [];

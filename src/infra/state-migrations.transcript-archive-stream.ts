@@ -1,4 +1,4 @@
-import { Readable } from "node:stream";
+import { compose } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { createZstdCompress, createZstdDecompress } from "node:zlib";
 
@@ -15,9 +15,9 @@ function* archiveInputChunks(bytes: Buffer): Generator<Buffer> {
   }
 }
 
-function decodedArchiveStream(bytes: Buffer, encoding: "identity" | "zstd"): Readable {
-  const input = Readable.from(archiveInputChunks(bytes));
-  return encoding === "zstd" ? input.pipe(createZstdDecompress()) : input;
+function decodedArchiveStream(bytes: Buffer, encoding: "identity" | "zstd") {
+  const input = archiveInputChunks(bytes);
+  return encoding === "zstd" ? compose(input, createZstdDecompress()) : input;
 }
 
 async function* transformArchiveLineChunks(params: {
@@ -71,6 +71,7 @@ async function* transformArchiveLineChunks(params: {
       newline = pending.indexOf("\n");
     }
   }
+  params.signal?.throwIfAborted();
   pending += acceptDecoded(decoder.end());
   if (pending) {
     yield emitLine(pending, false);
@@ -103,18 +104,18 @@ export async function transformArchiveBytesIncrementally(params: {
     return { changed: false, bytes: params.bytes };
   }
 
-  const transformed = Readable.from(
-    (async function* () {
-      for await (const part of transformArchiveLineChunks(params)) {
-        yield part.bytes;
-      }
-    })(),
-  );
-  const encoded = params.encoding === "zstd" ? transformed.pipe(createZstdCompress()) : transformed;
+  const transformed = (async function* () {
+    for await (const part of transformArchiveLineChunks(params)) {
+      yield part.bytes;
+    }
+  })();
+  const encoded =
+    params.encoding === "zstd" ? compose(transformed, createZstdCompress()) : transformed;
   const chunks: Buffer[] = [];
   for await (const chunk of encoded) {
     params.signal?.throwIfAborted();
     chunks.push(Buffer.from(chunk));
   }
+  params.signal?.throwIfAborted();
   return { changed: true, bytes: Buffer.concat(chunks) };
 }

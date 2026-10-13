@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { transformMediaArchiveLine } from "./state-migrations.media-persistence-transform.js";
+import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
 import { transformArchiveBytesIncrementally } from "./state-migrations.transcript-archive-stream.js";
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -43,6 +43,44 @@ describe("incremental transcript archive transforms", () => {
     );
   });
 
+  it.each(["identity", "zstd"] as const)(
+    "preserves UTF-8 and record boundaries across %s chunks",
+    async (encoding) => {
+      const chunkSize = encoding === "identity" ? 1024 * 1024 : 16 * 1024;
+      const prefix = '{"text":"';
+      const first = `${prefix}${"x".repeat(chunkSize - prefix.length - 1)}🙂"}`;
+      const last = '{"text":"終わり"}';
+      const content = `${first}\n${last}`;
+      const bytes = Buffer.from(content);
+      const seen: string[] = [];
+      const transformed = await transformArchiveBytesIncrementally({
+        bytes: encoding === "zstd" ? zstdCompressSync(bytes) : bytes,
+        encoding,
+        owner: "utf8",
+        transformLine: (line) => {
+          seen.push((JSON.parse(line) as { text: string }).text);
+          return { changed: false, content: line };
+        },
+      });
+      expect(seen).toEqual([`${"x".repeat(chunkSize - prefix.length - 1)}🙂`, "終わり"]);
+      expect(transformed.changed).toBe(false);
+      expect(
+        encoding === "zstd" ? zstdDecompressSync(transformed.bytes) : transformed.bytes,
+      ).toEqual(bytes);
+    },
+  );
+
+  it("propagates a damaged zstd stream", async () => {
+    await expect(
+      transformArchiveBytesIncrementally({
+        bytes: Buffer.from("not a zstd archive"),
+        encoding: "zstd",
+        owner: "damaged",
+        transformLine: (line) => ({ changed: false, content: line }),
+      }),
+    ).rejects.toThrow();
+  });
+
   it("applies the media persistence transform one JSONL record at a time", async () => {
     const source = Buffer.from(
       `${JSON.stringify({
@@ -59,7 +97,7 @@ describe("incremental transcript archive transforms", () => {
       bytes: source,
       encoding: "identity",
       owner: "media",
-      transformLine: transformMediaArchiveLine,
+      transformLine: transformMediaArchiveContent,
     });
     expect(transformed.changed).toBe(true);
     expect(JSON.parse(transformed.bytes.toString("utf8"))).toMatchObject({
