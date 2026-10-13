@@ -31,12 +31,12 @@ function runAfterPaint(callback: () => void, complete: () => void): () => void {
     }
   };
   // Paint timing requires the supported browser primitives, not a microtask approximation.
-  frame = window.requestAnimationFrame(() => {
+  frame = requestAnimationFrame(() => {
     frame = null;
     if (!active) {
       return;
     }
-    frame = window.requestAnimationFrame(() => {
+    frame = requestAnimationFrame(() => {
       frame = null;
       run();
     });
@@ -47,7 +47,7 @@ function runAfterPaint(callback: () => void, complete: () => void): () => void {
     }
     active = false;
     if (frame !== null) {
-      window.cancelAnimationFrame(frame);
+      cancelAnimationFrame(frame);
       frame = null;
     }
   };
