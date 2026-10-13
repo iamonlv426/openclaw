@@ -160,19 +160,17 @@ describe("canonical archive migration progress", () => {
   it("honors Doctor cancellation at the first committed batch boundary", async () => {
     const f = fixture();
     const interrupted = new Error("Doctor interrupted by SIGINT");
-    let scheduled = false;
     await expect(
       withSqliteReadOnlyWorkerScope(
         () =>
           f.run(() =>
             migrateCanonicalTranscriptArchives({
               ...f.options,
-              transformLine(content) {
-                if (!scheduled) {
-                  scheduled = true;
-                  setImmediate(() => f.controller.abort(interrupted));
+              writeCursor(cursor) {
+                f.options.writeCursor(cursor);
+                if ("sessionId" in cursor && cursor.sessionId === "031") {
+                  queueMicrotask(() => f.controller.abort(interrupted));
                 }
-                return f.options.transformLine(content);
               },
             }),
           ),
@@ -184,16 +182,23 @@ describe("canonical archive migration progress", () => {
     expect(f.cursor()).toEqual({ sessionId: "031", generation: "retained" });
   });
 
-  it("cancels archive inspection between batches", async () => {
+  it("cancels archive inspection while decoding a batch", async () => {
     const f = fixture();
     const interrupted = new Error("Doctor interrupted by SIGINT");
-    const parsed = vi.spyOn(directiveTransform, "parseDirectiveMigrationTranscriptEvent");
+    const parse = directiveTransform.parseDirectiveMigrationTranscriptEvent;
+    let calls = 0;
+    const parsed = vi
+      .spyOn(directiveTransform, "parseDirectiveMigrationTranscriptEvent")
+      .mockImplementation((...args) => {
+        const event = parse(...args);
+        if (++calls === TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE) {
+          f.controller.abort(interrupted);
+        }
+        return event;
+      });
     await expect(
       withSqliteReadOnlyWorkerScope(
-        async () => {
-          setImmediate(() => f.controller.abort(interrupted));
-          return transcriptDirectiveArchivesNeedMigration(f.database, f.options.start);
-        },
+        () => transcriptDirectiveArchivesNeedMigration(f.database, f.options.start),
         { signal: f.controller.signal, deadlineOwnedByCaller: true },
       ),
     ).rejects.toBe(interrupted);

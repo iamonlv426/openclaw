@@ -1,4 +1,5 @@
-import { compose } from "node:stream";
+import { PassThrough } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { StringDecoder } from "node:string_decoder";
 import { createZstdCompress, createZstdDecompress } from "node:zlib";
 
@@ -15,18 +16,18 @@ function* archiveInputChunks(bytes: Buffer): Generator<Buffer> {
   }
 }
 
-function decodedArchiveStream(bytes: Buffer, encoding: "identity" | "zstd") {
-  const input = archiveInputChunks(bytes);
-  return encoding === "zstd" ? compose(input, createZstdDecompress()) : input;
-}
-
-async function* transformArchiveLineChunks(params: {
+type ArchiveTransformOptions = {
   bytes: Buffer;
   encoding: "identity" | "zstd";
   owner: string;
   signal?: AbortSignal;
   transformLine: ArchiveLineTransform;
-}): AsyncGenerator<{ bytes: Buffer; changed: boolean }> {
+};
+
+async function* transformArchiveLineChunks(
+  chunks: AsyncIterable<Buffer>,
+  params: ArchiveTransformOptions,
+): AsyncGenerator<{ bytes: Buffer; changed: boolean }> {
   const decoder = new StringDecoder("utf8");
   let pending = "";
   let lineNumber = 0;
@@ -61,7 +62,7 @@ async function* transformArchiveLineChunks(params: {
     return decoded.slice(0, nul);
   };
 
-  for await (const chunk of decodedArchiveStream(params.bytes, params.encoding)) {
+  for await (const chunk of chunks) {
     params.signal?.throwIfAborted();
     pending += acceptDecoded(decoder.write(Buffer.from(chunk)));
     let newline = pending.indexOf("\n");
@@ -89,33 +90,38 @@ async function* transformArchiveLineChunks(params: {
  * bytes exactly; changed archives are decoded a second time and re-encoded with
  * the original codec, avoiding one archive-sized JavaScript string.
  */
-export async function transformArchiveBytesIncrementally(params: {
-  bytes: Buffer;
-  encoding: "identity" | "zstd";
-  owner: string;
-  signal?: AbortSignal;
-  transformLine: ArchiveLineTransform;
-}): Promise<{ changed: boolean; bytes: Buffer }> {
+export async function transformArchiveBytesIncrementally(
+  params: ArchiveTransformOptions,
+): Promise<{ changed: boolean; bytes: Buffer }> {
+  const decoder = () => (params.encoding === "zstd" ? createZstdDecompress() : new PassThrough());
   let changed = false;
-  for await (const part of transformArchiveLineChunks(params)) {
-    changed ||= part.changed;
-  }
+  // Await codec teardown as well as iteration errors before returning to Doctor.
+  await pipeline(archiveInputChunks(params.bytes), decoder(), async (source) => {
+    for await (const part of transformArchiveLineChunks(source, params)) {
+      changed ||= part.changed;
+    }
+  });
   if (!changed) {
     return { changed: false, bytes: params.bytes };
   }
 
-  const transformed = (async function* () {
-    for await (const part of transformArchiveLineChunks(params)) {
-      yield part.bytes;
-    }
-  })();
-  const encoded =
-    params.encoding === "zstd" ? compose(transformed, createZstdCompress()) : transformed;
   const chunks: Buffer[] = [];
-  for await (const chunk of encoded) {
-    params.signal?.throwIfAborted();
-    chunks.push(Buffer.from(chunk));
-  }
+  await pipeline(
+    archiveInputChunks(params.bytes),
+    decoder(),
+    async function* (source) {
+      for await (const part of transformArchiveLineChunks(source, params)) {
+        yield part.bytes;
+      }
+    },
+    params.encoding === "zstd" ? createZstdCompress() : new PassThrough(),
+    async (encoded) => {
+      for await (const chunk of encoded) {
+        params.signal?.throwIfAborted();
+        chunks.push(Buffer.from(chunk));
+      }
+    },
+  );
   params.signal?.throwIfAborted();
   return { changed: true, bytes: Buffer.concat(chunks) };
 }
