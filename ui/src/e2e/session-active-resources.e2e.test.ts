@@ -133,12 +133,12 @@ suite.define(() => {
           const explicitEnvironmentId = "manual-desktop";
           const gateway = await installMockGateway(page, {
             sessionKey: key,
+            sessions: [row, notes],
             featureMethods,
             deferredMethods: ["desktop.observe"],
             historyMessages: [{ role: "assistant", content: "Your existing desktop is ready." }],
             methodResponses: {
               "sessions.list": list(!staleRoster),
-              ...(staleRoster ? { "sessions.describe": { session: row } } : {}),
               "environments.list": inventory,
               "environments.status": explicitTargetOnReload
                 ? {
