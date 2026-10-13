@@ -83,7 +83,10 @@ import {
   type AgentDatabaseMigrationTarget,
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
-import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
+import {
+  transformMediaArchiveContent,
+  transformMediaArchiveLine,
+} from "./state-migrations.media-persistence-transform.js";
 import { repairDoctorSessionWindowOrphans } from "./state-migrations.session-window-repair.js";
 import {
   encodeArchiveContent,
@@ -370,6 +373,7 @@ async function migrateAgentDatabase(params: {
       verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, prepared: params.preparedArchives },
       onArchive: (archivePath) => params.canonicalArchivePaths.add(archivePath),
       transformContent: transformMediaArchiveContent,
+      transformLine: transformMediaArchiveLine,
     });
     refreshSqlitePlannerStatistics(database);
     return {

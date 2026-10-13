@@ -29,7 +29,10 @@ import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "./state-migrations.media-persistence-targets.js";
-import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
+import {
+  transformMediaArchiveContent,
+  transformMediaArchiveLine,
+} from "./state-migrations.media-persistence-transform.js";
 import {
   clearTranscriptArchiveRecoveryJournal,
   readTranscriptArchiveRecoveryJournal,
@@ -41,6 +44,10 @@ import {
   transcriptArchiveRecoveryRowKey,
   writeTranscriptArchiveRecoveryJournal,
 } from "./state-migrations.transcript-archive-publication.js";
+import {
+  type ArchiveLineTransform,
+  transformArchiveBytesIncrementally,
+} from "./state-migrations.transcript-archive-stream.js";
 import {
   parseDirectiveMigrationTranscriptEvent,
   transformHistoricalTranscriptEvent,
@@ -120,6 +127,10 @@ function transformArchiveContent(
   };
 }
 
+function transformArchiveLine(line: string, owner: string): { changed: boolean; content: string } {
+  return transformArchiveContent(line, owner);
+}
+
 export function encodeArchiveContent(
   content: string,
   encoding: "identity" | "zstd",
@@ -151,16 +162,17 @@ function hasArchiveTable(database: DatabaseSync): boolean {
   );
 }
 
-function listArchiveBatch(
+async function listArchiveBatch(
   database: DatabaseSync,
   cursor: ArchiveCursor | undefined,
   transformContent: ArchiveContentTransform = transformArchiveContent,
+  transformLine?: ArchiveLineTransform,
   options?: {
     archiveDirectory: string;
     signal?: AbortSignal;
     verified?: ReadonlySet<string>;
   },
-): ArchiveRowPlan[] {
+): Promise<ArchiveRowPlan[]> {
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
   let query = db
     .selectFrom("session_transcript_archives")
@@ -187,7 +199,8 @@ function listArchiveBatch(
       ),
     );
   }
-  return executeSqliteQuerySync(database, query).rows.map((row) => {
+  const plans: ArchiveRowPlan[] = [];
+  for (const row of executeSqliteQuerySync(database, query).rows) {
     const owner = `${row.session_id}:${row.generation}`;
     const archivePath = options
       ? transcriptArchivePathFor(options.archiveDirectory, row.archive_name)
@@ -203,18 +216,31 @@ function listArchiveBatch(
         ? transcriptArchiveFingerprint(archivePath, row.archive_sha256, encoding)
         : undefined;
       const verified = fingerprint !== undefined && options?.verified?.has(fingerprint) === true;
-      const transformed = verified
-        ? undefined
-        : transformContent(decodeSessionArchiveBytes(bytes, encoding === "zstd"), owner);
+      const streamed =
+        verified || !transformLine
+          ? undefined
+          : await transformArchiveBytesIncrementally({
+              bytes,
+              encoding,
+              owner,
+              signal: options?.signal,
+              transformLine,
+            });
+      const transformed =
+        verified || streamed
+          ? undefined
+          : transformContent(decodeSessionArchiveBytes(bytes, encoding === "zstd"), owner);
       options?.signal?.throwIfAborted();
-      const nextBytes = transformed?.changed
-        ? encodeArchiveContent(transformed.content, encoding, owner)
-        : bytes;
-      return {
+      const nextBytes = streamed?.changed
+        ? streamed.bytes
+        : transformed?.changed
+          ? encodeArchiveContent(transformed.content, encoding, owner)
+          : bytes;
+      plans.push({
         archiveName: row.archive_name,
         archiveSha256: row.archive_sha256,
         bytes,
-        changed: transformed?.changed === true,
+        changed: streamed?.changed === true || transformed?.changed === true,
         encoding,
         generation: row.generation,
         nextBytes,
@@ -222,7 +248,7 @@ function listArchiveBatch(
         publishedAt: row.published_at,
         sessionId: row.session_id,
         fingerprint: verified ? fingerprint : undefined,
-      };
+      });
     } catch (error) {
       if (options?.signal?.aborted && error === options.signal.reason) {
         throw error;
@@ -232,7 +258,8 @@ function listArchiveBatch(
         cause: error,
       });
     }
-  });
+  }
+  return plans;
 }
 
 export async function transcriptDirectiveArchivesNeedMigration(
@@ -250,7 +277,7 @@ export async function transcriptDirectiveArchivesNeedMigration(
   let cursor: ArchiveCursor | undefined = start.sessionId || start.generation ? start : undefined;
   while (true) {
     signal?.throwIfAborted();
-    const batch = listArchiveBatch(database, cursor);
+    const batch = await listArchiveBatch(database, cursor);
     const last = batch.at(-1);
     if (!last) {
       return false;
@@ -375,6 +402,7 @@ export async function migrateCanonicalTranscriptArchives(
   params: ArchiveMigrationOptions & {
     onArchive?: (archivePath: string) => void;
     transformContent: ArchiveContentTransform;
+    transformLine?: ArchiveLineTransform;
   },
 ): Promise<ArchiveMigrationResult> {
   const signal = resolveSqliteInspectionSignal(params.signal);
@@ -436,11 +464,13 @@ export async function migrateCanonicalTranscriptArchives(
       renewAgentDatabaseMaintenanceAuthorityIfPresent();
     }
     const batch = archivesPresent
-      ? listArchiveBatch(params.database, cursor, params.transformContent, {
-          archiveDirectory,
-          signal,
-          verified,
-        })
+      ? await listArchiveBatch(
+          params.database,
+          cursor,
+          params.transformContent,
+          params.transformLine,
+          { archiveDirectory, signal, verified },
+        )
       : [];
     if (batch.length === 0) {
       if (checkpoint) {
@@ -667,6 +697,7 @@ export async function prepareCanonicalTranscriptArchiveMigrations(
           verifyOnly: true,
           verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, collect: prepared },
           transformContent: transformMediaArchiveContent,
+          transformLine: transformMediaArchiveLine,
         });
       } finally {
         clearNodeSqliteKyselyCacheForDatabase(database);
@@ -682,5 +713,6 @@ export function migrateTranscriptDirectiveArchives(
   return migrateCanonicalTranscriptArchives({
     ...params,
     transformContent: transformArchiveContent,
+    transformLine: transformArchiveLine,
   });
 }
